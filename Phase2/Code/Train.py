@@ -47,7 +47,7 @@ import string
 from termcolor import colored, cprint
 import math as m
 from tqdm.notebook import tqdm
-import Misc.ImageUtils as iu
+# import Misc.ImageUtils as iu
 from Network.Network import CIFAR10Model
 from Misc.MiscUtils import *
 from Misc.DataUtils import *
@@ -56,6 +56,8 @@ from Misc.DataUtils import *
 
 # Don't generate pyc codes
 sys.dont_write_bytecode = True
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     
 def GenerateBatch(TrainSet, TrainLabels, ImageSize, MiniBatchSize):
@@ -92,7 +94,7 @@ def GenerateBatch(TrainSet, TrainLabels, ImageSize, MiniBatchSize):
         I1Batch.append(I1)
         LabelBatch.append(torch.tensor(Label))
         
-    return torch.stack(I1Batch), torch.stack(LabelBatch)
+    return torch.stack(I1Batch).to(device), torch.stack(LabelBatch).to(device)
 
 
 def PrettyPrint(NumEpochs, DivTrain, MiniBatchSize, NumTrainSamples, LatestFile):
@@ -127,12 +129,14 @@ def TrainOperation(TrainLabels, NumTrainSamples, ImageSize,
     Outputs:
     Saves Trained network in CheckPointPath and Logs to LogsPath
     """
+
+
     # Initialize the model
-    model = CIFAR10Model(InputSize=3*32*32,OutputSize=10) 
+    model = CIFAR10Model(InputSize=3*32*32,OutputSize=10).to(device)
     ###############################################
     # Fill your optimizer of choice here!
     ###############################################
-    Optimizer = ...
+    Optimizer = AdamW(model.parameters(), lr=0.001)
 
     # Tensorboard
     # Create a summary to monitor loss tensor
@@ -148,9 +152,9 @@ def TrainOperation(TrainLabels, NumTrainSamples, ImageSize,
         StartEpoch = 0
         print('New model initialized....')
         
-    for Epochs in tqdm(range(StartEpoch, NumEpochs)):
+    for Epochs in range(StartEpoch, NumEpochs):
         NumIterationsPerEpoch = int(NumTrainSamples/MiniBatchSize/DivTrain)
-        for PerEpochCounter in tqdm(range(NumIterationsPerEpoch)):
+        for PerEpochCounter in range(NumIterationsPerEpoch):
             Batch = GenerateBatch(TrainSet, TrainLabels, ImageSize, MiniBatchSize)
             
             # Predict output with forward pass
@@ -192,9 +196,9 @@ def main():
     # Parse Command Line arguments
     Parser = argparse.ArgumentParser()
     Parser.add_argument('--CheckPointPath', default='../Checkpoints/', help='Path to save Checkpoints, Default: ../Checkpoints/')
-    Parser.add_argument('--NumEpochs', type=int, default=50, help='Number of Epochs to Train for, Default:50')
+    Parser.add_argument('--NumEpochs', type=int, default=5, help='Number of Epochs to Train for, Default:50')
     Parser.add_argument('--DivTrain', type=int, default=1, help='Factor to reduce Train data by per epoch, Default:1')
-    Parser.add_argument('--MiniBatchSize', type=int, default=1, help='Size of the MiniBatch to use, Default:1')
+    Parser.add_argument('--MiniBatchSize', type=int, default=64, help='Size of the MiniBatch to use, Default:1')
     Parser.add_argument('--LoadCheckPoint', type=int, default=0, help='Load Model from latest Checkpoint from CheckPointsPath?, Default:0')
     Parser.add_argument('--LogsPath', default='Logs/', help='Path to save Logs for Tensorboard, Default=Logs/')
     TrainSet = torchvision.datasets.CIFAR10(root='./data', train=True,

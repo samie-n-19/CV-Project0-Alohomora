@@ -24,7 +24,7 @@ import sys
 # Don't generate pyc codes
 sys.dont_write_bytecode = True
 
-def SetupAll(BasePath, CheckPointPath):
+def SetupAll(CheckPointPath):
     """
     Inputs: 
     BasePath is the base path where Images are saved without "/" at the end
@@ -39,7 +39,7 @@ def SetupAll(BasePath, CheckPointPath):
     NumClasses - Number of classes
     """
     # Setup DirNames
-    DirNamesTrain =  SetupDirNames(BasePath)
+    DirNamesTrain =  SetupDirNames()
 
     # Read and Setup Labels
     LabelsPathTrain = './TxtFiles/LabelsTrain.txt'
@@ -61,7 +61,7 @@ def SetupAll(BasePath, CheckPointPath):
     # Number of classes
     NumClasses = 10
 
-    return DirNamesTrain, SaveCheckPoint, ImageSize, NumTrainSamples, TrainLabels, NumClasses
+    return SaveCheckPoint, ImageSize, NumTrainSamples, TrainLabels, NumClasses
 
 def ReadLabels(LabelsPathTrain):
     if(not (os.path.isfile(LabelsPathTrain))):
@@ -75,7 +75,7 @@ def ReadLabels(LabelsPathTrain):
     return TrainLabels
     
 
-def SetupDirNames(BasePath): 
+def SetupDirNames(): 
     """
     Inputs: 
     BasePath is the base path where Images are saved without "/" at the end
