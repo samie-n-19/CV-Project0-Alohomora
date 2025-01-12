@@ -317,9 +317,10 @@ def main():
     feature_strength = (Tg + Bg + Cg) / 3.0
     w1, w2 = 0.5, 0.5
     pb_lite = feature_strength * (w1 * canny_baseline + w2 * sobel_baseline)
+    pb_lite = cv2.threshold(pb_lite, 0.5, 1, cv2.THRESH_BINARY)[1]
     
     # Display and save PbLite
-    plt.imshow(pb_lite, cmap='hot')
+    plt.imshow(pb_lite, cmap='grey')
     plt.axis('off')
     plt.savefig('PbLite_ImageName.png')
     plt.show()

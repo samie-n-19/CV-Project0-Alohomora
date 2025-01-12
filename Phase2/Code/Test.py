@@ -25,6 +25,7 @@ import os
 import sys
 import glob
 import random
+import torchvision
 from skimage import data, exposure, img_as_float
 import matplotlib.pyplot as plt
 import numpy as np
@@ -44,6 +45,8 @@ from Misc.DataUtils import *
 
 # Don't generate pyc codes
 sys.dont_write_bytecode = True
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def SetupAll():
     """
@@ -74,11 +77,13 @@ def ReadImages(Img):
         print('ERROR: Image I1 cannot be read')
         sys.exit()
         
-    I1S = StandardizeInputs(np.float32(I1))
+    I1S = StandardizeInputs(I1)
+    I1S = ToTensor()(I1S)
+    I1S = I1S.unsqueeze(0)
 
-    I1Combined = np.expand_dims(I1S, axis=0)
+    
 
-    return I1Combined, I1
+    return I1S.to(device), I1
                 
 
 def Accuracy(Pred, GT):
@@ -143,7 +148,7 @@ def TestOperation(ImageSize, ModelPath, TestSet, LabelsPathPred):
     Predictions written to /content/data/TxtFiles/PredOut.txt
     """
     # Predict output with forward pass, MiniBatchSize for Test is 1
-    model = CIFAR10Model(InputSize=3*32*32,OutputSize=10) 
+    model = CIFAR10Model(InputSize=3*32*32,OutputSize=10).to(device)
     
     CheckPoint = torch.load(ModelPath)
     model.load_state_dict(CheckPoint['model_state_dict'])
@@ -151,7 +156,7 @@ def TestOperation(ImageSize, ModelPath, TestSet, LabelsPathPred):
     
     OutSaveT = open(LabelsPathPred, 'w')
 
-    for count in tqdm(range(len(TestSet))): 
+    for count in range(len(TestSet)): 
         Img, Label = TestSet[count]
         Img, ImgOrg = ReadImages(Img)
         PredT = torch.argmax(model(Img)).item()
@@ -170,16 +175,16 @@ def main():
 
     # Parse Command Line arguments
     Parser = argparse.ArgumentParser()
-    Parser.add_argument('--ModelPath', dest='ModelPath', default='/home/aa/144model.ckpt', help='Path to load latest model from, Default:ModelPath')
+    Parser.add_argument('--ModelPath', dest='ModelPath', default='../Checkpoints/4model.ckpt', help='Path to load latest model from, Default:ModelPath')
     Parser.add_argument('--LabelsPath', dest='LabelsPath', default='./TxtFiles/LabelsTest.txt', help='Path of labels file, Default:./TxtFiles/LabelsTest.txt')
     Args = Parser.parse_args()
     ModelPath = Args.ModelPath
     LabelsPath = Args.LabelsPath
-    TestSet = CIFAR10(root='data/', train=False)
+    TestSet = torchvision.datasets.CIFAR10(root='data/', train=False)
 
 
     # Setup all needed parameters including file reading
-    ImageSize = SetupAll(BasePath)
+    ImageSize = SetupAll()
 
     # Define PlaceHolder variables for Predicted output
     LabelsPathPred = './TxtFiles/PredOut.txt' # Path to save predicted labels

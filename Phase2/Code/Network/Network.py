@@ -14,7 +14,7 @@ Worcester Polytechnic Institute
 
 Code adapted from CMSC733 at the University of Maryland, College Park.
 """
-
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -27,7 +27,7 @@ def loss_fn(out, labels):
     ###############################################
     # Fill your loss function of choice here!
     ###############################################
-    loss = ...
+    loss = nn.CrossEntropyLoss()(out, labels)
     return loss
 
 class ImageClassificationBase(nn.Module):
@@ -54,30 +54,44 @@ class ImageClassificationBase(nn.Module):
     def epoch_end(self, epoch, result):
         print("Epoch [{}], loss: {:.4f}, acc: {:.4f}".format(epoch, result['loss'], result['acc']))
 
-
+    def set_device(self, device):
+        self.device = device
+        self.to(device)
 
 class CIFAR10Model(ImageClassificationBase):
   def __init__(self, InputSize, OutputSize):
-      """
-      Inputs: 
-      InputSize - Size of the Input
-      OutputSize - Size of the Output
-      """
-      #############################
-      # Fill your network initialization of choice here!
-      #############################
-
+        """
+        Inputs: 
+        InputSize - Size of the Input
+        OutputSize - Size of the Output
+        """
+        super().__init__()
+        #############################
+        # Fill your network initialization of choice here!
+        #############################
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(128 * 4 * 4, 512)
+        self.fc2 = nn.Linear(512, OutputSize)
+    
       
   def forward(self, xb):
-      """
-      Input:
-      xb is a MiniBatch of the current image
-      Outputs:
-      out - output of the network
-      """
-      #############################
-      # Fill your network structure of choice here!
-      #############################
-     
-      return out
+        """
+        Input:
+        xb is a MiniBatch of the current image
+        Outputs:
+        out - output of the network
+        """
+        #############################
+        # Fill your network structure of choice here!
+        #############################
+        x = self.pool(F.relu(self.conv1(xb)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))
+        x = x.view(-1, 128 * 4 * 4)
+        x = F.relu(self.fc1(x))
+        out = self.fc2(x)
+        return out
 
