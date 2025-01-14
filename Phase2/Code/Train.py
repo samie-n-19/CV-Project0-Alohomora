@@ -26,6 +26,7 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import datasets, transforms
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import StepLR
 from torchvision.datasets import CIFAR10
 import cv2
 import sys
@@ -49,10 +50,11 @@ import math as m
 from tqdm.notebook import tqdm
 # import Misc.ImageUtils as iu
 from Network.Network import CIFAR10Model
+from Network.Network import ResNet34
+from Network.Network import ResNeXt50
+from Network.Network import DenseNet121
 from Misc.MiscUtils import *
 from Misc.DataUtils import *
-
-
 
 # Don't generate pyc codes
 sys.dont_write_bytecode = True
@@ -132,11 +134,16 @@ def TrainOperation(TrainLabels, NumTrainSamples, ImageSize,
 
 
     # Initialize the model
-    model = CIFAR10Model(InputSize=3*32*32,OutputSize=10).to(device)
+    # model = CIFAR10Model(InputSize=3*32*32,OutputSize=10).to(device)
+    # model = ResNet34().to(device) 
+    # model = ResNeXt50().to(device)
+    model = DenseNet121().to(device)
+
     ###############################################
     # Fill your optimizer of choice here!
     ###############################################
     Optimizer = AdamW(model.parameters(), lr=0.001)
+    scheduler = StepLR(Optimizer, step_size=10, gamma=0.1)
 
     # Tensorboard
     # Create a summary to monitor loss tensor
@@ -153,36 +160,25 @@ def TrainOperation(TrainLabels, NumTrainSamples, ImageSize,
         print('New model initialized....')
         
     for Epochs in range(StartEpoch, NumEpochs):
-        NumIterationsPerEpoch = int(NumTrainSamples/MiniBatchSize/DivTrain)
+        NumIterationsPerEpoch = int(NumTrainSamples / MiniBatchSize / DivTrain)
         for PerEpochCounter in range(NumIterationsPerEpoch):
             Batch = GenerateBatch(TrainSet, TrainLabels, ImageSize, MiniBatchSize)
-            
-            # Predict output with forward pass
             LossThisBatch = model.training_step(Batch)
-
             Optimizer.zero_grad()
             LossThisBatch.backward()
             Optimizer.step()
-            
-            # Save checkpoint every some SaveCheckPoint's iterations
             if PerEpochCounter % SaveCheckPoint == 0:
-                # Save the Model learnt in this epoch
-                SaveName =  CheckPointPath + str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt'
-                
-                torch.save({'epoch': Epochs,'model_state_dict': model.state_dict(),'optimizer_state_dict': Optimizer.state_dict(),'loss': LossThisBatch}, SaveName)
+                SaveName = CheckPointPath + str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt'
+                torch.save({'epoch': Epochs, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': Optimizer.state_dict(), 'loss': LossThisBatch}, SaveName)
                 print('\n' + SaveName + ' Model Saved...')
-
             result = model.validation_step(Batch)
-            model.epoch_end(Epochs*NumIterationsPerEpoch + PerEpochCounter, result)
-            # Tensorboard
-            Writer.add_scalar('LossEveryIter', result["loss"], Epochs*NumIterationsPerEpoch + PerEpochCounter)
-            Writer.add_scalar('Accuracy', result["acc"], Epochs*NumIterationsPerEpoch + PerEpochCounter)
-            # If you don't flush the tensorboard doesn't update until a lot of iterations!
+            model.epoch_end(Epochs * NumIterationsPerEpoch + PerEpochCounter, result)
+            Writer.add_scalar('LossEveryIter', LossThisBatch.item(), Epochs * NumIterationsPerEpoch + PerEpochCounter)
+            Writer.add_scalar('Accuracy', result["val_acc"], Epochs * NumIterationsPerEpoch + PerEpochCounter)
             Writer.flush()
-
-        # Save model every epoch
+        scheduler.step()
         SaveName = CheckPointPath + str(Epochs) + 'model.ckpt'
-        torch.save({'epoch': Epochs,'model_state_dict': model.state_dict(),'optimizer_state_dict': Optimizer.state_dict(),'loss': LossThisBatch}, SaveName)
+        torch.save({'epoch': Epochs, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': Optimizer.state_dict(), 'loss': LossThisBatch}, SaveName)
         print('\n' + SaveName + ' Model Saved...')
         
 
@@ -198,7 +194,7 @@ def main():
     Parser.add_argument('--CheckPointPath', default='../Checkpoints/', help='Path to save Checkpoints, Default: ../Checkpoints/')
     Parser.add_argument('--NumEpochs', type=int, default=5, help='Number of Epochs to Train for, Default:50')
     Parser.add_argument('--DivTrain', type=int, default=1, help='Factor to reduce Train data by per epoch, Default:1')
-    Parser.add_argument('--MiniBatchSize', type=int, default=64, help='Size of the MiniBatch to use, Default:1')
+    Parser.add_argument('--MiniBatchSize', type=int, default=32, help='Size of the MiniBatch to use, Default:1')
     Parser.add_argument('--LoadCheckPoint', type=int, default=0, help='Load Model from latest Checkpoint from CheckPointsPath?, Default:0')
     Parser.add_argument('--LogsPath', default='Logs/', help='Path to save Logs for Tensorboard, Default=Logs/')
     TrainSet = torchvision.datasets.CIFAR10(root='./data', train=True,

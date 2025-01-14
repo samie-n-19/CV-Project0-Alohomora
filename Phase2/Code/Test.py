@@ -39,6 +39,9 @@ from sklearn.metrics import confusion_matrix
 from tqdm.notebook import tqdm
 import torch
 from Network.Network import CIFAR10Model
+from Network.Network import ResNet34
+from Network.Network import ResNeXt50
+from Network.Network import DenseNet121
 from Misc.MiscUtils import *
 from Misc.DataUtils import *
 
@@ -81,11 +84,8 @@ def ReadImages(Img):
     I1S = ToTensor()(I1S)
     I1S = I1S.unsqueeze(0)
 
-    
-
     return I1S.to(device), I1
                 
-
 def Accuracy(Pred, GT):
     """
     Inputs: 
@@ -148,8 +148,12 @@ def TestOperation(ImageSize, ModelPath, TestSet, LabelsPathPred):
     Predictions written to /content/data/TxtFiles/PredOut.txt
     """
     # Predict output with forward pass, MiniBatchSize for Test is 1
-    model = CIFAR10Model(InputSize=3*32*32,OutputSize=10).to(device)
-    
+    # model = CIFAR10Model(InputSize=3*32*32,OutputSize=10).to(device)
+    # model = ResNet34().to(device) 
+    # model = ResNeXt50().to(device)
+    model = DenseNet121().to(device)
+
+    model.eval()
     CheckPoint = torch.load(ModelPath)
     model.load_state_dict(CheckPoint['model_state_dict'])
     print('Number of parameters in this model are %d ' % len(model.state_dict().items()))
