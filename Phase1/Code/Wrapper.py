@@ -19,99 +19,238 @@ Code adapted from CMSC733 at the University of Maryland, College Park.
 
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
+from scipy.ndimage import rotate
+from scipy.signal import convolve2d
+from matplotlib import pyplot as plt
 from sklearn.cluster import KMeans
 
 def create_gaussian_kernel(size, sigma):
-    k = cv2.getGaussianKernel(size, sigma)
-    gaussian_kernel = np.outer(k, k)
+    k = np.linspace(-(size // 2), size // 2, size)
+    x, y = np.meshgrid(k, k)
+    gaussian_kernel = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+    gaussian_kernel /= np.sum(gaussian_kernel)
     return gaussian_kernel
 
+def sobel_kernel():
+    sobel_kernel = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+    return sobel_kernel
+
 def create_dog_filter(size, sigma1, sigma2):
-    g1 = create_gaussian_kernel(size, sigma1)
-    g2 = create_gaussian_kernel(size, sigma2)
-    dog = g1 - g2
+    G1 = create_gaussian_kernel(size, sigma1) 
+    G2 = create_gaussian_kernel(size, sigma2)
+    dog1 = cv2.filter2D(G1, -1, sobel_kernel())
+    dog2 = cv2.filter2D(G2, -1, sobel_kernel())
+    dog = []
+    for angle in np.linspace(0, 360, 16):
+        center_point = (dog1.shape[0] // 2, dog1.shape[1] // 2)
+        rotation_matrix = cv2.getRotationMatrix2D(center_point, angle, 1.0)
+        dog1_rotated = cv2.warpAffine(dog1, rotation_matrix, dog1.shape)
+        dog.append(dog1_rotated)
+
+    for angle in np.linspace(0, 360, 16):
+        center_point = (dog2.shape[0] // 2, dog2.shape[1] // 2)
+        rotation_matrix = cv2.getRotationMatrix2D(center_point, angle, 1.0)
+        dog2_rotated = cv2.warpAffine(dog2, rotation_matrix, dog2.shape)
+        dog.append(dog2_rotated)             
     return dog
 
-def rotate_image(image, angle):
-    center = (image.shape[1] // 2, image.shape[0] // 2)
-    rot_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-    rotated_image = cv2.warpAffine(image, rot_matrix, (image.shape[1], image.shape[0]))
-    return rotated_image
+def gaussian(size, scale):
+    x = np.linspace(-size // 2, size // 2, size)
+    y = np.linspace(-size // 2, size // 2, size)
+    X, Y = np.meshgrid(x, y)
+    g = np.exp(-(X**2 + Y**2) / (2 * scale**2))/ (2 * np.pi * (scale**2))
+    return g / g.sum()
 
-def create_log_filter(size, sigma):
-    g = create_gaussian_kernel(size, sigma)
-    log = cv2.Laplacian(g, cv2.CV_64F)
-    return log
+def first_derivative(size, scale):
+    x = np.linspace(-size // 2, size // 2, size)
+    gx = -(x / scale**2) * np.exp(-x**2 / (2 * scale**2)) / (np.sqrt(2 * np.pi) * scale)
+    return gx / np.abs(gx).sum()
 
-def create_derivative_filters(size, sigma, order):
-    g = create_gaussian_kernel(size, sigma)
-    if order == 1:
-        gx = cv2.Sobel(g, cv2.CV_64F, 1, 0, ksize=3)
-        gy = cv2.Sobel(g, cv2.CV_64F, 0, 1, ksize=3)
-        return gx, gy
-    elif order == 2:
-        gxx = cv2.Sobel(g, cv2.CV_64F, 2, 0, ksize=3)
-        gyy = cv2.Sobel(g, cv2.CV_64F, 0, 2, ksize=3)
-        return gxx, gyy
+def second_derivative(size, scale):
+    x = np.linspace(-size // 2, size // 2, size)
+    gxx = ((x**2 - scale**2) / scale**4) * np.exp(-x**2 / (2 * scale**2))/((np.sqrt(2 * np.pi) * scale))
+    return gxx / np.abs(gxx).sum()
 
-def generate_lm_filter_bank(scales, orientations):
-    size = 31  # Size of the filter
+def laplacian_of_gaussian(size, scale):
+    x = np.linspace(-size // 2, size // 2, size)
+    y = np.linspace(-size // 2, size // 2, size)
+    X, Y = np.meshgrid(x, y)
+    r2 = X**2 + Y**2
+    log = -(1 / (np.pi * scale**4)) * (1 - r2 / (2 * scale**2)) * np.exp(-r2 / (2 * scale**2))
+    return log / np.abs(log).sum()
+
+def generate_filters(scales, orientations, size=49, elongation=3):
     filters = []
 
-    # First and second order derivatives of Gaussians
     for scale in scales:
-        for order in [1, 2]:
-            gx, gy = create_derivative_filters(size, scale, order)
-            for i in range(orientations):
-                angle = i * (360 / orientations)
-                filters.append(rotate_image(gx, angle))
-                filters.append(rotate_image(gy, angle))
+        # Generate 1D Gaussian derivatives
+        y = np.linspace(-size // 2, size // 2, size)
+        x,y=np.meshgrid(y,y)
+        gx = first_derivative(size, scale)
+        gxx = second_derivative(size, scale)
+        gy =  np.exp(-y**2 / (2 * (3*scale)**2)) / (np.sqrt(2 * np.pi) * (3*scale))
+        gy= gy / np.abs(gy).sum()
 
-    # Laplacian of Gaussian filters
-    for scale in scales:
-        filters.append(create_log_filter(size, scale))
-        filters.append(create_log_filter(size, scale * 3))
+        # Create 2D filters using the outer product
+        gx_2d = gx*gy
+        gxx_2d = gxx*gy
 
-    # Gaussian filters
-    for scale in scales:
-        filters.append(create_gaussian_kernel(size, scale))
+        # Generate oriented filters by rotating the 2D convolutions
+        for orientation in range(orientations):
+            angle = orientation * (180.0 / orientations)
+            gx_rot = rotate(gx_2d, angle, reshape=False, order=1, mode='constant', cval=0)
+            gxx_rot = rotate(gxx_2d, angle, reshape=False, order=1, mode='constant', cval=0)
+
+            # Ensure all rotated filters are 2D with the proper shape
+            if gx_rot.shape != (size, size):
+                gx_rot = cv2.resize(gx_rot, (size, size))
+            if gxx_rot.shape != (size, size):
+                gxx_rot = cv2.resize(gxx_rot, (size, size))
+
+            filters.append(gx_rot)
+            filters.append(gxx_rot)
 
     return filters
 
+
+def lm_filter_bank(filter_type="LMS"):
+    if filter_type == "LMS":
+        scales = [1, np.sqrt(2), 2, 2 * np.sqrt(2)]  # LMS scales 
+    elif filter_type == "LML":
+        scales = [np.sqrt(2), 2, 2 * np.sqrt(2), 4]  # LML scales 
+    else:
+        raise ValueError("Invalid filter_type. Choose 'LMS' or 'LML'.")
+
+    orientations = 6
+    size = 49  # Filter size
+
+    # Generate first and second derivative filters (36 filters)
+    derivative_filters = generate_filters(scales[:3], orientations, size=size, elongation=3)
+
+    # Generate Laplacian of Gaussian (LoG) filters (8 filters)
+    log_filters = []
+    for scale in scales:  # 4 scales
+        log_filters.append(laplacian_of_gaussian(size, scale))       # Original scale
+        log_filters.append(laplacian_of_gaussian(size, 3 * scale))   # Scaled by 3
+
+    # Generate Gaussian filters (4 filters)
+    gaussian_filters = [gaussian(size, scale) for scale in scales]  # 4 scales
+
+    # Combine all filters
+    filter_bank = derivative_filters + log_filters + gaussian_filters
+    return filter_bank
+
+
+def display_filters(filter_bank, title="Filter Bank", n_rows=4, n_cols=12, save_path="/home/samruddhi/Downloads/YourDirectoryID_hw0/Phase1/Code"):
+    """Display filters in a filter bank in a 4-row, 12-column grid."""
+    n_filters = len(filter_bank)
+
+    plt.figure(figsize=(15, 15))  # Adjust the figure size if necessary
+    for i, f in enumerate(filter_bank):
+        plt.subplot(n_rows, n_cols, i + 1)
+        plt.imshow(f / np.max(np.abs(f)), cmap='gray') 
+        plt.axis('off')
+    plt.suptitle(title, fontsize=16)
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    plt.show()
+  
 def create_gabor_kernel(size, sigma, theta, lambd, gamma, psi):
+
+    # Calculate the dimensions of the Gaussian function
     sigma_x = sigma
-    sigma_y = sigma / gamma
+    sigma_y = sigma / gamma  # Apply the spatial aspect ratio
+    x, y = np.meshgrid(np.linspace(-size // 2, size // 2, size), np.linspace(-size // 2, size // 2, size))
 
-    nstds = 3  # Number of standard deviations to include in the kernel
-    xmax = max(abs(nstds * sigma_x * np.cos(theta)), abs(nstds * sigma_y * np.sin(theta)))
-    xmax = np.ceil(max(1, xmax))
-    ymax = max(abs(nstds * sigma_x * np.sin(theta)), abs(nstds * sigma_y * np.cos(theta)))
-    ymax = np.ceil(max(1, ymax))
-    xmin = -xmax
-    ymin = -ymax
-    (y, x) = np.meshgrid(np.arange(ymin, ymax + 1), np.arange(xmin, xmax + 1))
-
+    # Apply the rotation to the filter
     rotx = x * np.cos(theta) + y * np.sin(theta)
     roty = -x * np.sin(theta) + y * np.cos(theta)
 
+    # Gabor filter equation (Gaussian multiplied by sinusoidal wave)
     gabor = np.exp(-0.5 * (rotx ** 2 / sigma_x ** 2 + roty ** 2 / sigma_y ** 2)) * np.cos(2 * np.pi * rotx / lambd + psi)
     return gabor
 
-def create_half_disk_masks(radius, orientations):
-    masks = []
-    for orientation in range(orientations):
-        angle = np.pi * orientation / orientations
-        mask = np.zeros((2 * radius, 2 * radius), dtype=np.uint8)
-        cv2.ellipse(mask, (radius, radius), (radius, radius), np.degrees(angle), 0, 180, 1, -1)
-        masks.append(mask)
-        masks.append(np.flip(mask, axis=1))
-    return masks
+def generate_gabor_filter_bank(scales, orientations):
+    size = 49  # Size of the filter (31x31)
+    gamma = 0.5  # Spatial aspect ratio
+    psi = 0  # Phase offset of the sinusoid (0 or pi)
+
+    gabor_filters = []
+
+    # Loop through each scale and orientation to generate the Gabor filters
+    for scale in scales:
+        sigma = scale  # The standard deviation of the Gaussian function
+        lambd = 1.25 * sigma
+        for i in range(orientations):
+            theta = i * (np.pi / orientations)  # Calculate the angle for orientation
+            gabor_filter = create_gabor_kernel(size, sigma, theta, lambd, gamma, psi)
+            gabor_filters.append(gabor_filter)
+    
+    return gabor_filters
+
+def create_half_disc_mask(size, scale, theta, is_left=True):
+    # Define the center of the image
+    center = size // 2
+    y, x = np.indices((size, size))
+    
+    # Distance from center
+    distance = np.sqrt((x - center) ** 2 + (y - center) ** 2)
+    
+    # Create a binary mask for a full disc (radius = scale)
+    mask = (distance <= scale).astype(float)
+    
+    # Rotate the mask according to theta
+    x_rot = (x - center) * np.cos(theta) + (y - center) * np.sin(theta)
+    y_rot = -(x - center) * np.sin(theta) + (y - center) * np.cos(theta)
+    
+    # Create the left or right half-disc mask based on rotation and orientation
+    if is_left:
+        half_disc_mask = mask * (x_rot <= 0)
+    else:
+        half_disc_mask = mask * (x_rot >= 0)
+    
+    return half_disc_mask
+
+def generate_half_disc_bank(scales, orientations, size=31):
+    half_disc_masks = []
+    
+    for scale in scales:
+        for i in range(orientations):
+            # Calculate the orientation in radians
+            theta = i * (np.pi / orientations)
+            
+            # Generate the left and right half-disc masks for each orientation
+            left_mask = create_half_disc_mask(size, scale, theta, is_left=True)
+            right_mask = create_half_disc_mask(size, scale, theta, is_left=False)
+            
+            # Append the left and right masks
+            half_disc_masks.append(left_mask)
+            half_disc_masks.append(right_mask)
+    
+    return half_disc_masks
+
+def display_half_discs(half_disc_masks, n_cols=8, save_path="/home/samruddhi/Downloads/YourDirectoryID_hw0/Phase1/Code"):
+    n_filters = len(half_disc_masks)
+    n_rows = (n_filters + n_cols - 1) // n_cols  
+
+    plt.figure(figsize=(15, 15))
+    for i, mask in enumerate(half_disc_masks):
+        plt.subplot(n_rows, n_cols, i + 1)
+        plt.imshow(mask, cmap='gray')
+        plt.axis('off')
+    
+    plt.suptitle("Half-Disc Mask Bank", fontsize=16)
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    
+    plt.show()
 
 def generate_texton_map(image, filter_bank):
     responses = []
     for filter in filter_bank:
-        response = cv2.filter2D(image, -1, filter)
+        response = convolve2d(image, filter, mode='same')
         responses.append(response)
     responses = np.stack(responses, axis=-1)
     responses = responses.reshape(-1, responses.shape[-1])
@@ -120,7 +259,7 @@ def generate_texton_map(image, filter_bank):
     return texton_map
 
 def generate_brightness_map(image):
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray_image = np.dot(image[..., :3], [0.299, 0.587, 0.114])
     gray_image = gray_image.reshape(-1, 1)
     kmeans = KMeans(n_clusters=16).fit(gray_image)
     brightness_map = kmeans.labels_.reshape(image.shape[:2])
@@ -132,73 +271,71 @@ def generate_color_map(image):
     color_map = kmeans.labels_.reshape(image.shape[:2])
     return color_map
 
-def chi_square_distance(map, masks):
-    gradients = np.zeros((map.shape[0], map.shape[1], len(masks) // 2))
+def chi_square_distance(img, masks, num_bins):
+    height, width = img.shape
+    num_orientations = len(masks) // 2  # Each orientation has two masks (left and right)
+    gradients = np.zeros((height, width, num_orientations), dtype=np.float32)
+
+    # Iterate through each pair of masks
     for i in range(0, len(masks), 2):
         left_mask = masks[i]
         right_mask = masks[i + 1]
-        for bin_val in range(np.max(map) + 1):
-            bin_map = (map == bin_val).astype(np.float32)
-            g_i = cv2.filter2D(bin_map, -1, left_mask)
-            h_i = cv2.filter2D(bin_map, -1, right_mask)
-            chi_sqr = ((g_i - h_i) ** 2) / (g_i + h_i + 1e-10)
-            gradients[:, :, i // 2] += chi_sqr
+        orientation_idx = i // 2  # Index for storing gradients for this orientation
+
+        # Iterate through bins in the map
+        for bin_val in range(num_bins):
+            # Create a binary map for the current bin
+            bin_map = (img == bin_val).astype(np.float32)
+
+            # Compute histogram values for left and right masks using cv2.filter2D
+            g_i = cv2.filter2D(bin_map, -1, left_mask, borderType=cv2.BORDER_REFLECT)
+            h_i = cv2.filter2D(bin_map, -1, right_mask, borderType=cv2.BORDER_REFLECT)
+
+            # Compute χ² distance for this bin and update gradients
+            chi_sqr = ((g_i - h_i) ** 2) / (g_i + h_i + 1e-10)  # Add small value to avoid division by zero
+            gradients[:, :, orientation_idx] += chi_sqr
+
     return gradients
 
-def main():
 
+def main():
     """
     Generate Difference of Gaussian Filter Bank: (DoG)
-    Display all the filters in this filter bank and save image as DoG.png,
-    use command "cv2.imwrite(...)"
+    Display all the filters in this filter bank and save image as DoG.png
     """
     size = 31  # Size of the filter
     scales = [1, 2]  # Different scales
-    orientations = 16  # Number of orientations
 
-    filters = []
+    dog_filters = []
     for scale in scales:
         dog_filter = create_dog_filter(size, scale, scale * 1.6)
-        for i in range(orientations):
-            angle = i * (360 / orientations)
-            rotated_filter = rotate_image(dog_filter, angle)
-            filters.append(rotated_filter)
+        dog_filters.extend(dog_filter)
 
     # Display and save the filters
-    fig, axes = plt.subplots(len(scales), orientations, figsize=(20, 5))
+    fig, axes = plt.subplots(len(scales), 16, figsize=(20, 5))
     for i, ax in enumerate(axes.flat):
-        ax.imshow(filters[i], cmap='gray')
+        ax.imshow(dog_filter[i], cmap='gray')
         ax.axis('off')
     plt.savefig('DoG.png')
     plt.show()
 
     """
     Generate Leung-Malik Filter Bank: (LM)
-    Display all the filters in this filter bank and save image as LM.png,
-    use command "cv2.imwrite(...)"
+    Display all the filters in this filter bank and save image as LM.png
     """
+    # Generate LMS filter bank
+    lms_filters = lm_filter_bank(filter_type="LMS")
+    print(f"Total filters in LMS: {len(lms_filters)}")
 
-    scales_lms = [1, np.sqrt(2), 2, 2 * np.sqrt(2)]
-    scales_lml = [np.sqrt(2), 2, 2 * np.sqrt(2), 4]
-    orientations = 6
+    # Generate LML filter bank
+    lml_filters = lm_filter_bank(filter_type="LML")
+    print(f"Total filters in LML: {len(lml_filters)}")
 
-    filters_lms = generate_lm_filter_bank(scales_lms, orientations)
-    filters_lml = generate_lm_filter_bank(scales_lml, orientations)
+    # Display LMS filter bank
+    display_filters(lms_filters, title="LMS Filter Bank", save_path="LMS.png")
 
-    # Display and save the filters
-    fig, axes = plt.subplots(8, 6, figsize=(20, 20))
-    for i, ax in enumerate(axes.flat):
-        ax.imshow(filters_lms[i], cmap='gray')
-        ax.axis('off')
-    plt.savefig('LMS.png')
-    plt.show()
-
-    fig, axes = plt.subplots(8, 6, figsize=(20, 20))
-    for i, ax in enumerate(axes.flat):
-        ax.imshow(filters_lml[i], cmap='gray')
-        ax.axis('off')
-    plt.savefig('LML.png')
-    plt.show()
+    # Display LML filter bank
+    display_filters(lml_filters, title="LML Filter Bank", save_path="LML.png")
     
     """
     Generate Gabor Filter Bank: (Gabor)
@@ -206,29 +343,17 @@ def main():
     use command "cv2.imwrite(...)"
     """
     
-    size = 31  # Size of the filter
-    scales = [1, 2, 3]  # Different scales
+    scales = [5,6,7,8,9]  # Different scales
     orientations = 8  # Number of orientations
-    lambd = 10  # Wavelength of the sinusoidal factor
-    gamma = 0.5  # Spatial aspect ratio
-    psi = 0  # Phase offset
-
-    filters = []
-    for scale in scales:
-        sigma = scale
-        for i in range(orientations):
-            theta = i * (np.pi / orientations)
-            gabor_filter = create_gabor_kernel(size, sigma, theta, lambd, gamma, psi)
-            filters.append(gabor_filter)
+    gabor_filters = generate_gabor_filter_bank(scales, orientations)
 
     # Display and save the filters
     fig, axes = plt.subplots(len(scales), orientations, figsize=(20, 5))
     for i, ax in enumerate(axes.flat):
-        ax.imshow(filters[i], cmap='gray')
+        ax.imshow(gabor_filters[i], cmap='gray')
         ax.axis('off')
     plt.savefig('Gabor.png')
     plt.show()
-
 
     image_path = '/home/samruddhi/Downloads/YourDirectoryID_hw0/Phase1/BSDS500/Images/1.jpg'  
     image = cv2.imread(image_path)
@@ -238,25 +363,21 @@ def main():
     # Convert image to grayscale
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Generate Half-disk masks
-    radius = 15
-    orientations = 8
-    masks = create_half_disk_masks(radius, orientations)
+    scales = [5, 10, 15]  # Three scales
+    orientations = 8  # Eight orientations
     
-    # Display and save Half-disk masks
-    fig, axes = plt.subplots(2, orientations, figsize=(20, 5))
-    for i, ax in enumerate(axes.flat):
-        ax.imshow(masks[i], cmap='gray')
-        ax.axis('off')
-    plt.savefig('HDMasks.png')
-    plt.show()
+    # Generate the half-disc filter bank
+    masks = generate_half_disc_bank(scales, orientations)
+    
+    # Display the half-disc masks
+    display_half_discs(masks, save_path='HalfDiscMasks.png')
 
     # Generate Texton Map
-    filter_bank = [create_gaussian_kernel(31, sigma) for sigma in [1, 2, 3]]
+    filter_bank = dog_filters + lms_filters + lml_filters + gabor_filters
     texton_map = generate_texton_map(gray_image, filter_bank)
     
     # Display and save Texton Map
-    plt.imshow(texton_map, cmap='nipy_spectral')
+    plt.imshow(texton_map, cmap='viridis')
     plt.axis('off')
     plt.savefig('TextonMap_ImageName.png')
     plt.show()
@@ -264,25 +385,46 @@ def main():
     # Generate Brightness Map
     brightness_map = generate_brightness_map(image)
     
-    # Generate Brightness Gradient (Bg)
-    brightness_gradient = chi_square_distance(brightness_map, masks)
-    
-    # Display and save Brightness Gradient
-    plt.imshow(np.sum(brightness_gradient, axis=-1), cmap='hot')
+    # Display and save Brightness Map
+    plt.imshow(brightness_map, cmap='viridis')
     plt.axis('off')
-    plt.savefig('Bg_ImageName.png')
+    plt.savefig('BrightnessMap_ImageName.png')
     plt.show()
 
     # Generate Color Map
     color_map = generate_color_map(image)
     
+    # Display and save Color Map
+    plt.imshow(color_map, cmap='viridis')
+    plt.axis('off')
+    plt.savefig('ColorMap_ImageName.png')
+    plt.show()
+    Tg = chi_square_distance(texton_map, masks, num_bins=64)
+    Bg = chi_square_distance(brightness_map, masks, num_bins=16)
+    Cg = chi_square_distance(color_map, masks, num_bins=16)
+    
+    # Display and save Texton Gradient
+    plt.imshow(np.sum(Tg, axis=-1), cmap='viridis')
+    plt.axis('off')
+    plt.savefig( "/home/samruddhi/Downloads/YourDirectoryID_hw0/Phase1/Code/Tg_Image.png")
+    plt.show()
+
+    # Generate Brightness Gradient (Bg)
+    #brightness_gradient = chi_square_distance(brightness_map, masks)
+    
+    # Display and save Brightness Gradient
+    plt.imshow(np.sum(Bg, axis=-1), cmap='viridis')
+    plt.axis('off')
+    plt.savefig("/home/samruddhi/Downloads/YourDirectoryID_hw0/Phase1/Code/Bg_ImageName.png")
+    plt.show()
+
     # Generate Color Gradient (Cg)
-    color_gradient = chi_square_distance(color_map, masks)
+    #color_gradient = chi_square_distance(color_map, masks)
     
     # Display and save Color Gradient
-    plt.imshow(np.sum(color_gradient, axis=-1), cmap='hot')
+    plt.imshow(np.sum(Cg, axis=-1), cmap='viridis')
     plt.axis('off')
-    plt.savefig('Cg_ImageName.png')
+    plt.savefig("/home/samruddhi/Downloads/YourDirectoryID_hw0/Phase1/Code/Cg_ImageName.png")
     plt.show()
 
     """
@@ -310,10 +452,9 @@ def main():
     Display PbLite and save image as PbLite_ImageName.png
     use command "cv2.imwrite(...)"
     """
-    Tg = np.sum(chi_square_distance(texton_map, masks), axis=-1)
-    Bg = np.sum(brightness_gradient, axis=-1)
-    Cg = np.sum(color_gradient, axis=-1)
-    
+    Tg=np.max(Tg,axis=2)
+    Bg=np.max(Bg,axis=2)
+    Cg=np.max(Cg,axis=2)
     feature_strength = (Tg + Bg + Cg) / 3.0
     w1, w2 = 0.5, 0.5
     pb_lite = feature_strength * (w1 * canny_baseline + w2 * sobel_baseline)
@@ -322,7 +463,7 @@ def main():
     # Display and save PbLite
     plt.imshow(pb_lite, cmap='grey')
     plt.axis('off')
-    plt.savefig('PbLite_ImageName.png')
+    plt.savefig( "/home/samruddhi/Downloads/YourDirectoryID_hw0/Phase1/Code/PbLite_ImageName.png")
     plt.show()
     print("PbLite image saved as PbLite_ImageName.png")
 
